@@ -1,0 +1,29 @@
+# 编译产物
+*.exe
+*.o
+*.a
+*.out
+gpuscan
+stage3
+stage4
+coords
+
+# 中间数据
+hutbases.txt
+valid_seeds.txt
+fort_final.txt
+testbases.txt
+test200.txt
+ranked.txt
+all1483.txt
+top60.txt
+one.txt
+ref_out.txt
+ref_err.txt
+
+# cubiomes 源码（依赖，另行 clone）
+cubiomes/
+
+# 系统
+.DS_Store
+Thumbs.db
