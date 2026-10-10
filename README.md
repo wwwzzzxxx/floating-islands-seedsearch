@@ -4,6 +4,8 @@
 
 > **穷尽整个 48 位种子空间（281,474,976,710,656 个种子），筛出 1483 个同时满足 5 项农场指标的世界种子。**
 
+> **仓库镜像**：[GitHub](https://github.com/wwwzzzxxx/floating-islands-seedsearch) ｜ [Gitee](https://gitee.com/pzwzx/floating-islands-seedsearch)（国内访问推荐 Gitee）
+
 ---
 
 ## 成绩单
