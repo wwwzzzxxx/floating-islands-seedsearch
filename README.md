@@ -26,6 +26,10 @@
 > 所以扫完 2⁴⁸ 就等于扫完了「所有可能的结构布局」，剩下的高 16 位是纯赚的——
 > 它只影响生物群系，可以事后枚举 65536 个变体去挑群系最好的那个。
 
+> **⚠️ 事后发现那 740 秒本来可以省掉**：四联小屋的全部基是一个**静态可预计算的集合**，
+> [Cubiomes Viewer](https://github.com/Cubitect/cubiomes-viewer) 直接把它当数据文件随软件发布
+> （`rc/qh/`，28 个文件 / 差分编码 / 4.1 MB）。详见下文「提速：基是静态表，不用扫」。
+
 ---
 
 ## 我们筛了什么（玩家视角）
@@ -99,6 +103,59 @@
 
 ---
 
+## 提速：四联结构的基是静态表，不用扫
+
+（2026-10-11 补充。参考 [Cubitect/cubiomes-viewer](https://github.com/Cubitect/cubiomes-viewer) 源码，MIT）
+
+深挖 Cubiomes Viewer 后发现的几件事，按价值排序：
+
+### ① 四联小屋的全部基是预计算好的静态表
+
+| 步骤 | 本仓库初版做法 | viewer 的做法 |
+|---|---|---|
+| 枚举四联小屋基 | RTX 4090 穷举 2⁴⁸，**740 秒** | 读 `rc/qh/` 预计算表（28 文件 / 差分编码 / 4.1 MB），**约 0 秒** |
+| 四联神殿基 | 扫 2⁴⁸（半径放宽到 256） | `seedtables.h` 硬编码 **121 个**社区标准基，**0 秒** |
+
+差分编码的读法（`src/searchthread.cpp` 的 `genQHBases()`）：
+
+```
+文件名           = 低 20 位（16 进制），即 (seed+salt)&0xfffff
+文件每行         = 高 28 位的差分值
+mid += 每行的值  →  s48 = (mid << 20) + low  →  push(s48 - salt)
+```
+
+**交叉验证**：把 viewer 的 `rc/qh/` 解码，得到 **755,745** 个基，与我们用 4090 穷举 2⁴⁸
+得到的数量**完全一致**；本仓库 1483 个种子的小屋基 **1483/1483 全部命中**该表。
+两条独立实现互相印证——既说明我们的扫描没写错，也说明那 740 秒是在重复造轮子。
+
+### ② 临时查询用模逆，别遍历区域
+
+`cubiomes/quadbase.c` 的 `scanForQuadBits()` 有个值得抄的技巧。要找「基的低 20 位等于
+某给定值」的区域 `(i,j)`，而 `moveStructure(s48,-i,-j) = s48 - A·i - B·j`，于是
+
+```
+B·j ≡ s48 - A·i - lbit   (mod 2^20)
+```
+
+用 `B = 132897987541` 在 mod 2^20 下的**逆元**把 `j` 直接解出来，内层循环只走 `j += 2^20`。
+把 O(宽×高) 的区域枚举降到近乎 O(宽)。自己写扫描器时可以直接把这个式子搬过去。
+
+### ③ 便宜检查放在前面
+
+viewer 的 `testTreeAt()` 分三趟：`PASS_FAST_48`（只做不依赖群系的便宜检查）→
+`PASS_FULL_48`（加群系检查）→ `PASS_FULL_64`（完整 64 位测试）。
+我们这条流水线本质上也是这个顺序（先结构位置、后群系/村庄/河流），只是没显式分层。
+
+### 对复现的影响
+
+- **想验证本仓库结果**：不必上 GPU。下载 cubiomes-viewer 的 `rc/qh/` 解码，几秒钟就能得到
+  全部 755,745 个四联小屋基，然后直接跑 `stage3.c` 的变体搜索。
+- **四联神殿**：社区标准基只有 121 个（`seedtables.h` 的 `g_qm_90`），可以直接取用。
+  但注意本仓库用的是**放宽到 256 格**的标准（原因见「踩过的坑」第 1 条），
+  放宽后的基不在那 121 个里——这一点两者不通用。
+
+---
+
 ## 复现（给想自己扫的人）
 
 依赖：[cubiomes](https://github.com/Cubitect/cubiomes)（结构位置与群系判定的权威实现）。
@@ -119,10 +176,15 @@ gcc -O3 -march=native -I. -o ../coords ../src/coords.c $CUB -lm -lpthread   # �
 
 | 文件 | 作用 | 命令 |
 |---|---|---|
-| `src/gpuscan.cu` | CUDA 移植 cubiomes 的 quadbase，全空间枚举「女巫小屋四联」位置 base | `./gpuscan -start 0 -count 281474976710656 -hutr 128 -storehut` |
+| `src/decode_qh.py` | **（推荐，跳过 GPU）**从 cubiomes-viewer 的预计算表解码全部四联小屋基，0.6 秒 | `python src/decode_qh.py <viewer>/rc/qh -o hutbases.txt` |
+| `src/gpuscan.cu` | （等价但慢）CUDA 移植 cubiomes 的 quadbase，全空间枚举「女巫小屋四联」位置 base | `./gpuscan -start 0 -count 281474976710656 -hutr 128 -storehut` |
 | `src/stage3.c` | 多线程高 16 位变体搜索：小屋/神殿群系 + 村庄 + 河流 | `./stage3 hutbases.txt -offset 6 -t 64 -out valid.txt` |
 | `src/stage4.c` | 要塞四联路口（含堡垒互斥过滤） | `./stage4 seeds.txt -range 4000 -out fort.txt` |
 | `src/coords.c` | 输出某个种子的全部 tp 坐标 | `./coords <seed> <神殿偏移dx> <神殿偏移dz>` |
+
+`gpuscan.cu` 与 `decode_qh.py` 是**同一件事的两种做法**，产出已交叉验证一致
+（755,745 个基，且 1483 个种子的小屋基全部命中）。想快速复现就走 `decode_qh.py`；
+`gpuscan.cu` 保留作独立验证——两条实现互为依据，比只信一边稳。
 
 ---
 
